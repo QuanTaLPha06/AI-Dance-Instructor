@@ -129,13 +129,13 @@ def train_kathak_model():
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if torch.cuda.is_available():
-            print(f"\n🚀 CUDA ACCELERATION ENABLED:")
+            print(f"\n[CUDA] Acceleration ENABLED:")
             print(f"   Device: {torch.cuda.get_device_name(0)}")
             print(f"   Dedicated VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
             pin_mem = True
             batch_size = 512
         else:
-            print("\n⚠️ CUDA not detected in PyTorch. Running on CPU.")
+            print("\n[INFO] CUDA not detected. Running on CPU.")
             pin_mem = False
             batch_size = 128
 
@@ -200,7 +200,7 @@ def train_kathak_model():
                     print(f"  [Epoch {epoch+1:02d}/{NUM_EPOCHS} | Batch {batches_done:>5}/{total_batches} ({pct:>5.1f}%)] "
                           f"Loss: {current_loss:.4f} | Acc: {current_acc:.2f}% | "
                           f"Elapsed: {int(elapsed//60)}m{int(elapsed%60):02d}s | "
-                          f"ETA: {int(eta_sec//60)}m{int(eta_sec%60):02d}s")
+                          f"ETA: {int(eta_sec//60)}m{int(eta_sec%60):02d}s", flush=True)
 
             avg_train_loss = total_loss / len(train_loader)
             train_acc = (train_correct / train_total) * 100.0
@@ -226,14 +226,14 @@ def train_kathak_model():
             current_lr = optimizer.param_groups[0]['lr']
             scheduler.step(avg_val_loss)
 
-            print(f"\n🏁 EPOCH {epoch+1} SUMMARY: "
+            print(f"\n>> EPOCH {epoch+1} SUMMARY: "
                   f"Train Loss={avg_train_loss:.4f}, Train Acc={train_acc:.2f}% | "
-                  f"Val Loss={avg_val_loss:.4f}, Val Acc={val_acc:.2f}% | LR={current_lr:.6f}\n")
+                  f"Val Loss={avg_val_loss:.4f}, Val Acc={val_acc:.2f}% | LR={current_lr:.6f}\n", flush=True)
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 torch.save(model.state_dict(), MODEL_SAVE_PATH + ".pt")
-                print(f"  ⭐ Saved new best checkpoint ({val_acc:.2f}%) to {MODEL_SAVE_PATH}.pt")
+                print(f"  [CHECKPOINT] Saved new best model ({val_acc:.2f}%) to {MODEL_SAVE_PATH}.pt", flush=True)
 
         print(f"{'='*80}")
         print(f"\nBest Validation Accuracy: {best_val_acc:.2f}%")
