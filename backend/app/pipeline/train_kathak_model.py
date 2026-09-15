@@ -58,8 +58,10 @@ if HAS_TORCH:
 
         def __getitem__(self, idx):
             data = np.load(self.file_paths[idx]).astype(np.float32)  # (30, 50)
+            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
             if self.mean is not None and self.std is not None:
                 data = (data - self.mean) / self.std
+            data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
             return torch.from_numpy(data), self.labels[idx]
 else:
     PyTorchKathakLSTM = None
@@ -73,11 +75,16 @@ def compute_streaming_stats(file_paths, sample_size=50000):
     count = 0
     for idx in indices:
         data = np.load(file_paths[idx]).astype(np.float64)  # (30, 50)
+        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
         running_sum += data.sum(axis=0)
         running_sq_sum += (data ** 2).sum(axis=0)
         count += data.shape[0]
     mean = running_sum / count
-    std = np.sqrt(running_sq_sum / count - mean ** 2) + 1e-6
+    var = np.maximum(running_sq_sum / count - mean ** 2, 1e-5)
+    std = np.sqrt(var)
+    std = np.where(std < 1e-3, 1.0, std)
+    mean = np.nan_to_num(mean, nan=0.0, posinf=0.0, neginf=0.0)
+    std = np.nan_to_num(std, nan=1.0, posinf=1.0, neginf=1.0)
     return mean.astype(np.float32).reshape(1, 50), std.astype(np.float32).reshape(1, 50)
 
 
