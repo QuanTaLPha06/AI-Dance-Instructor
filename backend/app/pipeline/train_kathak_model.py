@@ -127,28 +127,43 @@ def train_kathak_model():
         mean, std = compute_streaming_stats(train_paths, sample_size=50000)
         print(f"Normalization computed (sampled 50K files). Mean range: [{mean.min():.4f}, {mean.max():.4f}]")
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.is_available():
+            print(f"\n🚀 CUDA ACCELERATION ENABLED:")
+            print(f"   Device: {torch.cuda.get_device_name(0)}")
+            print(f"   Dedicated VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.2f} GB")
+            pin_mem = True
+            batch_size = 512
+        else:
+            print("\n⚠️ CUDA not detected in PyTorch. Running on CPU.")
+            pin_mem = False
+            batch_size = 128
+
         print("\nTraining Kathak LSTM Model using PyTorch (disk-backed lazy loading)...")
         NUM_EPOCHS = 40
-        BATCH_SIZE = 128
+        BATCH_SIZE = batch_size
 
         train_dataset = LazyNpyDataset(train_paths, train_labels, mean=mean, std=std)
         val_dataset = LazyNpyDataset(val_paths, val_labels, mean=mean, std=std)
         train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                                  num_workers=2, pin_memory=True, persistent_workers=True)
-        val_loader = DataLoader(val_dataset, batch_size=512, shuffle=False,
-                                num_workers=2, pin_memory=True, persistent_workers=True)
+                                  num_workers=0, pin_memory=pin_mem)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE * 2, shuffle=False,
+                                num_workers=0, pin_memory=pin_mem)
 
-        model = PyTorchKathakLSTM(num_classes=len(labels))
+        model = PyTorchKathakLSTM(num_classes=len(labels)).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(model.parameters(), lr=0.002, weight_decay=1e-4)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
         id_to_label = {v: k for k, v in label_to_id.items()}
         best_val_acc = 0.0
+        total_batches = len(train_loader)
 
         print(f"\n{'='*80}")
         print(f"{'Epoch':>6} | {'Train Loss':>11} | {'Train Acc':>10} | {'Val Loss':>10} | {'Val Acc':>10} | {'LR':>10}")
         print(f"{'='*80}")
+
+        import time
 
         for epoch in range(NUM_EPOCHS):
             # --- Training ---
@@ -156,16 +171,37 @@ def train_kathak_model():
             total_loss = 0.0
             train_correct = 0
             train_total = 0
-            for batch_x, batch_y in train_loader:
+            start_time = time.time()
+
+            for batch_idx, (batch_x, batch_y) in enumerate(train_loader):
+                batch_x = batch_x.to(device)
+                batch_y = batch_y.to(device)
+
                 optimizer.zero_grad()
                 outputs = model(batch_x)
                 loss = criterion(outputs, batch_y)
                 loss.backward()
                 optimizer.step()
+
                 total_loss += loss.item()
                 preds = torch.argmax(outputs, dim=1)
                 train_correct += (preds == batch_y).sum().item()
                 train_total += batch_y.size(0)
+
+                # Periodic batch-level progress update every 250 batches
+                if (batch_idx + 1) % 250 == 0 or (batch_idx + 1) == total_batches:
+                    elapsed = time.time() - start_time
+                    batches_done = batch_idx + 1
+                    pct = (batches_done / total_batches) * 100.0
+                    rate = batches_done / max(elapsed, 0.01)
+                    eta_sec = (total_batches - batches_done) / max(rate, 0.01)
+                    current_loss = total_loss / batches_done
+                    current_acc = (train_correct / train_total) * 100.0
+                    print(f"  [Epoch {epoch+1:02d}/{NUM_EPOCHS} | Batch {batches_done:>5}/{total_batches} ({pct:>5.1f}%)] "
+                          f"Loss: {current_loss:.4f} | Acc: {current_acc:.2f}% | "
+                          f"Elapsed: {int(elapsed//60)}m{int(elapsed%60):02d}s | "
+                          f"ETA: {int(eta_sec//60)}m{int(eta_sec%60):02d}s")
+
             avg_train_loss = total_loss / len(train_loader)
             train_acc = (train_correct / train_total) * 100.0
 
@@ -176,6 +212,8 @@ def train_kathak_model():
             val_total = 0
             with torch.no_grad():
                 for batch_x, batch_y in val_loader:
+                    batch_x = batch_x.to(device)
+                    batch_y = batch_y.to(device)
                     outputs = model(batch_x)
                     loss = criterion(outputs, batch_y)
                     val_loss += loss.item()
@@ -188,26 +226,30 @@ def train_kathak_model():
             current_lr = optimizer.param_groups[0]['lr']
             scheduler.step(avg_val_loss)
 
-            print(f"{epoch+1:>6} | {avg_train_loss:>11.4f} | {train_acc:>9.2f}% | {avg_val_loss:>10.4f} | {val_acc:>9.2f}% | {current_lr:>10.6f}")
+            print(f"\n🏁 EPOCH {epoch+1} SUMMARY: "
+                  f"Train Loss={avg_train_loss:.4f}, Train Acc={train_acc:.2f}% | "
+                  f"Val Loss={avg_val_loss:.4f}, Val Acc={val_acc:.2f}% | LR={current_lr:.6f}\n")
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 torch.save(model.state_dict(), MODEL_SAVE_PATH + ".pt")
+                print(f"  ⭐ Saved new best checkpoint ({val_acc:.2f}%) to {MODEL_SAVE_PATH}.pt")
 
         print(f"{'='*80}")
         print(f"\nBest Validation Accuracy: {best_val_acc:.2f}%")
         print(f"Saved best PyTorch model to {MODEL_SAVE_PATH}.pt")
 
         # --- Per-class accuracy breakdown ---
-        model.load_state_dict(torch.load(MODEL_SAVE_PATH + ".pt", weights_only=True))
+        model.load_state_dict(torch.load(MODEL_SAVE_PATH + ".pt", weights_only=True, map_location=device))
         model.eval()
         all_preds = []
         all_labels_list = []
         with torch.no_grad():
             for batch_x, batch_y in val_loader:
+                batch_x = batch_x.to(device)
                 outputs = model(batch_x)
                 preds = torch.argmax(outputs, dim=1)
-                all_preds.extend(preds.numpy())
+                all_preds.extend(preds.cpu().numpy())
                 all_labels_list.extend(batch_y.numpy())
         all_preds = np.array(all_preds)
         all_labels_arr = np.array(all_labels_list)

@@ -12,6 +12,8 @@ print("  Training Kathak LSTM Model on Full Dataset (1.85M samples)")
 print("=" * 70 + "\n")
 
 from app.pipeline.train_kathak_model import train_kathak_model
-train_kathak_model()
 
-print("\nTraining complete!")
+if __name__ == "__main__":
+    train_kathak_model()
+    print("\nTraining complete!")
+
