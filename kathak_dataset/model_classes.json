@@ -1,0 +1,10 @@
+{
+  "label_to_id": {
+    "kathak_basic_tatkar": 0,
+    "kathak_ccrt_part1": 1,
+    "kathak_hastak_mudras": 2,
+    "kathak_iccr_vol2": 3,
+    "kathak_step_lesson_2": 4
+  },
+  "num_classes": 5
+}
