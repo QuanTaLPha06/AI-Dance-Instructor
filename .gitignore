@@ -29,6 +29,9 @@ build/
 kathak_dataset/raw_videos/
 kathak_dataset/processed_samples/
 kathak_dataset/dataset_metadata.json
+kathak_kaggle_dataset/kathak_processed_samples.zip
+*.zip
+*.npy
 *.mp4
 *.avi
 *.mov
@@ -49,3 +52,4 @@ Thumbs.db
 .env.local
 .env.development.local
 .env.production.local
+.env.production

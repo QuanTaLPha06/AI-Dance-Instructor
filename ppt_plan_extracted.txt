@@ -1,0 +1,296 @@
+=== SLIDE 1 (ppt/slides/slide1.xml) ===
+AI-POWERED DANCE GUIDANCE
+AI Dance Instructor
+One web app. Record. Compare. Improve.
+Final product plan • UX • technical architecture • methodology • implementation roadmap • resources
+CASUAL CAPTURE
+TikTok-like ease — without becoming a social-video clone.
+T
+eam
+: Kevin Gandhi, Aryan
+Rane
+, Aryan
+Kumar
+01
+01
+
+=== SLIDE 2 (ppt/slides/slide2.xml) ===
+02
+• PRODUCT
+The problem we are solving
+Dance practice is frequent. Objective feedback is not.
+01
+Limited coaching
+Many learners practice at home without a trained instructor watching every session.
+02
+Subjective self-review
+A dancer can feel a move is wrong without knowing whether the issue is timing, posture, balance or flow.
+03
+High coaching barrier
+Quality guidance can be costly or geographically limited — especially for classical forms.
+PRODUCT OPPORTUNITY
+Turn a phone camera into an always-available practice coach.
+02
+
+=== SLIDE 3 (ppt/slides/slide3.xml) ===
+03
+• PRODUCT VISION
+Not a TikTok clone
+We borrow the frictionless capture experience — the product is the AI instructor.
+1
+Pick a routine
+2
+Record
+3
+AI analyzes
+4
+Practice weakest part
+5
+Re-test
+CORE LOOP
+Watch → attempt → receive specific feedback → drill → measure improvement.
+The app's value is the coaching loop, not the feed.
+03
+
+=== SLIDE 4 (ppt/slides/slide4.xml) ===
+04
+• USER EXPERIENCE
+Simple enough to start in seconds
+One account, one app, two presentation worlds.
+1
+Discover
+Choose a genre + reference routine
+2
+Capture
+Camera opens with instant framing checks
+3
+Analyze
+Upload starts an async AI analysis
+4
+Learn
+Score + timestamped feedback appears
+5
+Improve
+Drill the weakest segment and re-test
+Dance Coach
+● READY TO RECORD
+◎
+Full body detected
+RECORD
+04
+
+=== SLIDE 5 (ppt/slides/slide5.xml) ===
+05
+• DUAL THEME UI
+Two visual worlds, one product
+Theme is a presentation layer — scoring logic and user data remain unified.
+W
+WESTERN
+Pop / hip-hop / freestyle / trend energy
+
+• Bold, high-contrast UI
+• Vertical short-form reference browsing
+• Large, immediate score animations
+• Looser spatial tolerance; musicality + flow emphasized
+I
+INDIAN
+Bharatanatyam / Kathak / Lavani / Koli
+
+• Warmer, instructional layout
+• More structured feedback
+• Classical form + keyframe accuracy
+• Mudra / expression layer activated where required
+recording • playback • skeleton overlay • feedback • progress
+05
+
+=== SLIDE 6 (ppt/slides/slide6.xml) ===
+06
+• TECHNICAL ARCHITECTURE
+How a recording becomes a coaching result
+MVP: single phone camera + async server-side 3D analysis.
+Camera
+getUserMedia
+WebCodecs
+Preview
+MediaPipe
+on-device
+Detection
+YOLOv8-Pose
++ tracking
+3D Pose
+WHAM-style
+3D lifting
+Alignment
+Procrustes
++ Soft-DTW
+Scoring
+Rhythm + form
++ genre weights
+Feedback
+Natural language
++ overlays
+GENRE CONFIG  →  scoring weights • tolerances • keyframes • active sub-models
+06
+
+=== SLIDE 7 (ppt/slides/slide7.xml) ===
+07
+• METHODOLOGY
+The comparison engine
+We do not compare raw pixels — we compare motion in space and time.
+1
+3D pose
+WHAM-style 2D→3D lifting gives world-grounded body motion and foot-contact information.
+2
+Normalize
+Procrustes removes scale, translation and rotation differences between dancers.
+3
+Compare form
+Joint angles + limb-direction vectors produce interpretable posture deviations.
+4
+Align time
+Soft-DTW separates tempo drift from true movement/form error.
+5
+Score rhythm
+Musical beats + kinematic beats produce a Beat Alignment Score.
+6
+Explain
+Timestamped feedback turns metrics into actionable coaching cues.
+07
+
+=== SLIDE 8 (ppt/slides/slide8.xml) ===
+08
+• REAL-WORLD CAMERA ROBUSTNESS
+Never silently score a bad recording
+The capture layer protects the scoring engine from framing, lighting and tracking failures.
+A
+Framing check
+On-device pose preview confirms the dancer is visible before recording.
+B
+Person detection
+YOLOv8-Pose detects the dancer frame-by-frame for the current prototype path.
+C
+Identity tracking
+ByteTrack can maintain a stable subject through spins, blur and brief exits.
+D
+Confidence gates
+Edge-of-frame / low-confidence events are flagged instead of producing misleading scores.
+Production safeguard
+If the camera cannot see enough of the body, the system asks the user to fix it — it does not pretend the score is reliable.
+08
+
+=== SLIDE 9 (ppt/slides/slide9.xml) ===
+09
+• GENRE-CONDITIONED AI
+The same engine should not judge every dance the same way
+Scoring profiles make the system extensible without re-architecting the backend.
+Genre
+Primary emphasis
+Example feedback behavior
+Western freestyle / hip-hop
+BAS + flow / energy
+Reward musicality; tolerate larger spatial variation.
+Bharatanatyam / Kathak
+Pose + keyframes
+Strict form constraints; activate mudra layer.
+Config lives in JSON/DB
+weights • thresholds • keyframes • active sub-models
+09
+
+=== SLIDE 10 (ppt/slides/slide10.xml) ===
+10
+• FINAL STACK
+Freemium-first, scale without a rewrite
+Open-source software where possible; upgrade the same providers/services as usage grows.
+PWA
+React + Next.js + Tailwind
+Camera: getUserMedia • WebCodecs • MediaPipe WASM
+API / jobs
+Python + FastAPI + Celery + Redis
+Async analysis queue; reusable cache
+Vision
+MediaPipe + YOLOv8-Pose + WHAM
+On-device preview → server-side 3D scoring
+Audio
+Librosa
+Beat / onset / rhythm features
+Math
+SciPy + Soft-DTW + PyTorch3D
+Normalization, temporal alignment, 3D ops
+Data / infra
+Fire
+base + R2 +
+Vercel
+Auth, Postgres, storage, app hosting
+COST CENTER
+GPU inference for server-side 3D lifting is the main usage-driven cost.
+10
+
+=== SLIDE 11 (ppt/slides/slide11.xml) ===
+11
+• IMPLEMENTATION
+Build the accuracy core before polishing the UI
+The order is deliberate: validate scoring, then wrap it in a frictionless PWA.
+P0
+Plan lock
+Reference-video rights • MVP genres • async decision • acceptance criteria
+P1
+Accuracy core
+Ingest • 3D pose • Procrustes • joint angles • Soft-DTW • labeled validation
+P2
+Rhythm
+Onsets • kinematic beats • Beat Alignment Score
+P3
+Personalization
+Genre configs • per-genre rating • cross-theme calibration • mudras
+P4
+PWA
+Recording • playback • overlays • dual theme • feedback • dashboard
+P5
+Scale
+Performance/cost optimization • rights-cleared content • optional multi-camera
+11
+
+=== SLIDE 12 (ppt/slides/slide12.xml) ===
+12
+• MILESTONES
+Suggested delivery timeline
+A practical sequence for a small student/product team; adjust duration after the first accuracy benchmark.
+W1–2
+Plan + dataset
+P0
+W3–6
+3D + alignment
+P1
+W7–8
+Rhythm
+P2
+W9–10
+Genre + rating
+P3
+W11–1
+3
+PWA + themes
+P4
+W1
+4
+–1
+5
+Pilot + optimize
+P5
+MILESTONE GATE
+Do not move to polished UX until real recorded videos produce stable, interpretable scores.
+12
+
+=== SLIDE 13 (ppt/slides/slide13.xml) ===
+13
+• END STATE
+The product we are building
+An AI dance instructor that feels effortless to use — but is rigorous underneath.
+RECORD
+COMPARE
+IMPROVE
+REPEAT
+A single coaching loop across Western + Indian dance worlds
+with 3D motion • rhythm intelligence • genre-aware scoring • actionable feedback
+13
+

@@ -1,0 +1,18 @@
+{
+  "title": "Kathak Dance AI BiLSTM Model Dataset",
+  "id": "kathak-dance-ai-bilstm-dataset",
+  "licenses": [
+    {
+      "name": "CC0-1.0"
+    }
+  ],
+  "keywords": [
+    "dance",
+    "pose-estimation",
+    "bilstm",
+    "pytorch",
+    "deep-learning",
+    "kathak"
+  ],
+  "description": "Preprocessed 50-dimensional biomechanical pose and feature sequence dataset for 40 Kathak dance classes, sampled at 30 frames per window across 1,855,392 temporal samples."
+}

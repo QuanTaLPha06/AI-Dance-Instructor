@@ -1,0 +1,19 @@
+{
+  "dataset_name": "Kathak Dance AI BiLSTM + Attention Dataset",
+  "num_classes": 40,
+  "total_samples": 1855392,
+  "feature_dimension": 50,
+  "sequence_length_frames": 30,
+  "data_format": "numpy (.npy) feature arrays",
+  "feature_schema": [
+    "Normalized 3D Joint Distances (Shoulders, Elbows, Wrists, Hips, Knees, Ankles)",
+    "Procrustes Aligned Skeleton Coordinates",
+    "Hand Mudra Landmark Embeddings",
+    "Temporal Angular Velocities & Accelerations"
+  ],
+  "train_val_split_recommendation": {
+    "train_percent": 80,
+    "val_percent": 20,
+    "seed": 42
+  }
+}
