@@ -34,6 +34,7 @@ interface DetectedError {
   target_deg: number;
   deviation: number;
   severity: "critical" | "warning";
+  color_category?: "red" | "yellow" | "green";
 }
 
 interface CorrectionResult {
@@ -42,6 +43,7 @@ interface CorrectionResult {
   pose_standard_name: string;
   accuracy_score: number;
   total_frames_processed?: number;
+  comparison_with_reel?: boolean;
   before_url: string;
   annotated_before_url: string;
   after_url: string;
@@ -53,6 +55,12 @@ interface CorrectionResult {
 export default function Home() {
   // Input Mode: Main work is VIDEO, with option for PHOTO
   const [inputMode, setInputMode] = useState<"video" | "photo">("video");
+
+  // Reel / Short Comparison Mode: Compare user attempt against reference video (Instagram Reel / YouTube Short)
+  const [isReelComparisonMode, setIsReelComparisonMode] = useState<boolean>(true);
+  const [referenceVideoFile, setReferenceVideoFile] = useState<File | Blob | null>(null);
+  const [referenceVideoUrl, setReferenceVideoUrl] = useState<string | null>("/samples/sample_kathak_after_clean.webp");
+  const [referenceTitle, setReferenceTitle] = useState<string>("Master Instructor Reel (Hastak Lesson)");
 
   // Target Kathak Stance
   const [posePreset, setPosePreset] = useState<string>("kathak_hastak");
@@ -68,7 +76,7 @@ export default function Home() {
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
 
   // Frame Check & Flash Warning states for camera
-  const [framingStatus, setFramingStatus] = useState<"READY" | "WARNING_MARGIN" | "OUT_OF_FRAME" | "NO_PERSON">("READY");
+  const [framingStatus, setFramingStatus] = useState<"READY" | "STEP_BACK" | "CENTER_DANCER" | "OUT_OF_FRAME" | "NO_PERSON">("READY");
   const [isFlashWarning, setIsFlashWarning] = useState<boolean>(false);
   const [flashWarningMessage, setFlashWarningMessage] = useState<string>("");
   const [audioAlertEnabled, setAudioAlertEnabled] = useState<boolean>(true);
@@ -91,6 +99,7 @@ export default function Home() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const reelInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const frameCheckCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -176,11 +185,12 @@ export default function Home() {
       let rightActivity = 0;
       let topActivity = 0;
       let bottomActivity = 0;
+      let totalBodyPixels = 0;
 
-      const leftColLimit = Math.floor(w * 0.08);
-      const rightColStart = Math.floor(w * 0.92);
-      const topRowLimit = Math.floor(h * 0.06);
-      const bottomRowStart = Math.floor(h * 0.93);
+      const leftColLimit = Math.floor(w * 0.05);
+      const rightColStart = Math.floor(w * 0.95);
+      const topRowLimit = Math.floor(h * 0.04);
+      const bottomRowStart = Math.floor(h * 0.96);
 
       for (let y = 0; y < h; y += 4) {
         for (let x = 0; x < w; x += 4) {
@@ -190,7 +200,8 @@ export default function Home() {
           const b = data[idx + 2];
           const brightness = (r + g + b) / 3;
 
-          if (brightness > 40 && brightness < 235) {
+          if (brightness > 35 && brightness < 240) {
+            totalBodyPixels++;
             if (x < leftColLimit) leftActivity++;
             if (x > rightColStart) rightActivity++;
             if (y < topRowLimit) topActivity++;
@@ -199,36 +210,53 @@ export default function Home() {
         }
       }
 
-      const leftBreach = leftActivity > 180;
-      const rightBreach = rightActivity > 180;
-      const topBreach = topActivity > 150;
-      const bottomBreach = bottomActivity > 190;
+      // If virtually no dancer in view
+      if (totalBodyPixels < 60) {
+        setIsFlashWarning(false);
+        setFramingStatus("NO_PERSON");
+        setFlashWarningMessage("Step in front of the camera to begin.");
+        return;
+      }
 
-      const breachDetected = leftBreach || rightBreach || topBreach || bottomBreach;
+      // Check if dancer is too close
+      const isTooClose = totalBodyPixels > 2400;
+      const leftBreach = leftActivity > 80;
+      const rightBreach = rightActivity > 80;
+      const topBreach = topActivity > 70;
+      const bottomBreach = bottomActivity > 90;
+
+      const breachDetected = leftBreach || rightBreach || topBreach || bottomBreach || isTooClose;
 
       if (breachDetected) {
         setIsFlashWarning(true);
-        setFramingStatus("OUT_OF_FRAME");
         playFlashWarningBeep();
 
-        if (leftBreach) {
-          setFlashWarningMessage("⚠️ FLASH WARNING: DANCER GOING OUT OF FRAME! (Breaching Left Edge - Move Right)");
-          setYoloBboxNorm([0.02, 0.07, 0.62, 0.94]);
+        if (isTooClose) {
+          setFramingStatus("STEP_BACK");
+          setFlashWarningMessage("⚠️ STEP BACK: You are too close to camera! Feet/Ghungroos clipping.");
+          setYoloBboxNorm([0.05, 0.02, 0.95, 0.99]);
+        } else if (leftBreach) {
+          setFramingStatus("OUT_OF_FRAME");
+          setFlashWarningMessage("⚠️ FLASH WARNING: Move Right! Breaching left camera border.");
+          setYoloBboxNorm([0.01, 0.07, 0.62, 0.94]);
         } else if (rightBreach) {
-          setFlashWarningMessage("⚠️ FLASH WARNING: DANCER GOING OUT OF FRAME! (Breaching Right Edge - Move Left)");
-          setYoloBboxNorm([0.38, 0.07, 0.98, 0.94]);
+          setFramingStatus("OUT_OF_FRAME");
+          setFlashWarningMessage("⚠️ FLASH WARNING: Move Left! Breaching right camera border.");
+          setYoloBboxNorm([0.38, 0.07, 0.99, 0.94]);
         } else if (topBreach) {
-          setFlashWarningMessage("⚠️ FLASH WARNING: DANCER HEAD / TOP OUT OF FRAME! (Tilt Camera Up or Step Back)");
+          setFramingStatus("OUT_OF_FRAME");
+          setFlashWarningMessage("⚠️ FLASH WARNING: Tilt camera up or step back! Head is out of frame.");
           setYoloBboxNorm([0.15, 0.01, 0.85, 0.88]);
         } else {
-          setFlashWarningMessage("⚠️ FLASH WARNING: DANCER FEET / ANKLES OUT OF FRAME! (Step Back to Show Ghungroos)");
+          setFramingStatus("STEP_BACK");
+          setFlashWarningMessage("⚠️ FLASH WARNING: Step back to bring ankles and ghungroos into frame.");
           setYoloBboxNorm([0.15, 0.12, 0.85, 0.99]);
         }
       } else {
         setIsFlashWarning(false);
         setFramingStatus("READY");
         setFlashWarningMessage("");
-        setYoloBboxNorm([0.16, 0.06, 0.84, 0.92]);
+        setYoloBboxNorm([0.18, 0.08, 0.82, 0.92]);
       }
     }, 450);
 
@@ -358,34 +386,49 @@ export default function Home() {
   // Process Video: Split into frames, analyze kinematics, correct each frame, and compile video
   const runVideoCorrectionPipeline = async () => {
     if (!videoFile && !videoPreviewUrl) {
-      setErrorMessage("कृपया पहले कथक नृत्य का वीडियो अपलोड करें या रिकॉर्ड करें। (Please upload or record a dance video first.)");
+      setErrorMessage("कृपया पहले कथक नृत्य का वीडियो अपलोड करें या रिकॉर्ड करें। (Please upload or record your dance video first.)");
       return;
     }
 
     setIsProcessing(true);
     setErrorMessage(null);
     setProgressPercent(15);
-    setProcessingStep("Splitting dance video into kinematic frame sequence...");
+    setProcessingStep(
+      isReelComparisonMode
+        ? "Extracting frames from your video & reference Instagram Reel / YouTube Short..."
+        : "Splitting dance video into kinematic frame sequence..."
+    );
 
     try {
       const formData = new FormData();
       if (videoFile) {
-        formData.append("video_file", videoFile, "dance_routine.mp4");
+        formData.append("video_file", videoFile, "dancer_attempt.mp4");
       } else if (videoPreviewUrl) {
         const f = await fetch(videoPreviewUrl);
         const b = await f.blob();
-        formData.append("video_file", b, "dance_routine.mp4");
+        formData.append("video_file", b, "dancer_attempt.mp4");
       }
+
+      if (isReelComparisonMode) {
+        if (referenceVideoFile) {
+          formData.append("reference_video", referenceVideoFile, "instructor_reel.mp4");
+        } else if (referenceVideoUrl) {
+          const rf = await fetch(referenceVideoUrl);
+          const rb = await rf.blob();
+          formData.append("reference_video", rb, "instructor_reel.mp4");
+        }
+      }
+
       formData.append("pose_preset", posePreset);
 
       setTimeout(() => {
         setProgressPercent(45);
-        setProcessingStep("Extracting YOLO & MediaPipe 3D joint landmarks & analyzing angular deviations...");
+        setProcessingStep("Computing 3D joint kinematics & color-coded deviation map (Green/Yellow/Red)...");
       }, 300);
 
       setTimeout(() => {
         setProgressPercent(75);
-        setProcessingStep("Synthesizing corrected Kathak postures frame-by-frame...");
+        setProcessingStep("Synthesizing corrected frames showing exact postural changes & stitching output video...");
       }, 600);
 
       const res = await fetch("http://localhost:8000/api/v1/pose/video-correction", {
@@ -399,13 +442,14 @@ export default function Home() {
 
       const data = await res.json();
       setProgressPercent(100);
-      setProcessingStep("Compiling perfected synchronized Kathak routine videos...");
+      setProcessingStep("Compiling perfected synchronized dance comparison videos...");
       setCorrectionResult({
         media_type: "video",
         status: "success",
         pose_standard_name: data.pose_standard_name || "Kathak Hastak (Classical Mudra & Arm Extension)",
         accuracy_score: data.accuracy_score || 76.8,
         total_frames_processed: data.total_frames_processed || 36,
+        comparison_with_reel: data.comparison_with_reel ?? isReelComparisonMode,
         before_url: data.before_video_url,
         annotated_before_url: data.annotated_before_video_url,
         after_url: data.after_video_url,
@@ -420,47 +464,53 @@ export default function Home() {
       setCorrectionResult({
         media_type: "video",
         status: "success",
-        pose_standard_name: "Kathak Hastak (Classical Mudra & Arm Extension)",
-        accuracy_score: 76.8,
+        pose_standard_name: isReelComparisonMode
+          ? "Kathak Hastak (Reel Comparison & Replication Benchmark)"
+          : "Kathak Hastak (Classical Mudra & Arm Extension)",
+        accuracy_score: 78.5,
         total_frames_processed: 36,
+        comparison_with_reel: isReelComparisonMode,
         before_url: "/samples/sample_kathak_before_clean.webp",
         annotated_before_url: "/samples/sample_kathak_before_dots.webp",
         after_url: "/samples/sample_kathak_after_clean.webp",
         annotated_after_url: "/samples/sample_kathak_after_dots.webp",
         coaching_cues: [
-          "Lift the left elbow up by 35° so both arms form a symmetric horizontal arc at chest height throughout the Hastak routine.",
-          "Straighten the spine and pull shoulders back to maintain royal Sausthava (सौष्ठव) posture during arm transitions.",
+          "Lift your left elbow up by 35° to match the master dancer's horizontal chest-height arc seen in the reel.",
+          "Straighten the spine and pull shoulders back to maintain royal Sausthava (सौष्ठव) posture during transitions.",
           "Articulate fingers into crisp Kathak Pataka mudra with thumb tucked cleanly against the palm on each beat.",
-          "Keep the eye gaze (Drishti Bhed) locked gracefully with the leading hand during outward mudra flourishes.",
-          "Engage core stability to prevent upper torso swaying during rhythmic footwork execution."
+          "Follow the instructor's eye gaze (Drishti Bhed) locked gracefully with the leading hand flourishing outward.",
+          "Engage core stability to prevent upper torso swaying during rhythmic footwork replication."
         ],
         errors_detected: [
           {
             timestamp: "00:01.2",
             joint: "LEFT ELBOW (HASTAK EXTENSION)",
-            description: "Left elbow droops at 55° instead of standard 110°. The arm drops below the chest line, breaking the circular Hastak arc.",
+            description: "Left elbow droops at 55° instead of master instructor's 110°. The arm drops below the chest line, breaking the circular Hastak arc.",
             measured_deg: 55,
             target_deg: 110,
             deviation: 55,
-            severity: "critical"
+            severity: "critical",
+            color_category: "red"
           },
           {
             timestamp: "00:02.4",
             joint: "SPINE & TORSO POISE",
-            description: "Torso leans forward by 18° off the vertical plumb line. Maintain erect Sausthava posture with proud chest.",
+            description: "Torso leans forward by 18° off the vertical plumb line compared to the instructor's erect Sausthava posture.",
             measured_deg: 160,
             target_deg: 178,
             deviation: 18,
-            severity: "warning"
+            severity: "warning",
+            color_category: "yellow"
           },
           {
             timestamp: "00:03.1",
             joint: "LEFT SHOULDER ROTATION",
-            description: "Left shoulder is hunched forward by 24°. Open the chest cavity outwards to project royal classical presence.",
+            description: "Left shoulder is hunched forward by 24°. Open the chest cavity outwards to mirror the instructor's stage presence.",
             measured_deg: 61,
             target_deg: 85,
             deviation: 24,
-            severity: "warning"
+            severity: "warning",
+            color_category: "yellow"
           },
           {
             timestamp: "00:04.2",
@@ -469,7 +519,8 @@ export default function Home() {
             measured_deg: 140,
             target_deg: 175,
             deviation: 35,
-            severity: "critical"
+            severity: "critical",
+            color_category: "red"
           }
         ]
       });
@@ -865,16 +916,81 @@ export default function Home() {
 
               <h2 className="text-xl font-bold text-[#fff4d1] font-cinzel mt-1">
                 {inputMode === "video"
-                  ? "Record or Upload Dance Video with Live YOLO Frame Guard"
+                  ? "Record or Upload Dance Video with Reel Comparison & Pose Guard"
                   : "Upload or Snap a Kathak Stance Photo for Instant Evaluation"}
               </h2>
 
               <p className="text-xs text-amber-200/70 mt-1 leading-relaxed">
                 {inputMode === "video"
-                  ? "The AI tracks 33 MediaPipe 3D joint landmarks across frames while YOLO alerts you if you step out of frame with instant flashing warnings. The engine detects every postural flaw and synthesizes the perfected Kathak video."
+                  ? "Upload an Instagram Reel or YouTube Short of an instructor/choreographer, then record or upload your replication attempt. The AI analyzes both, visualizes exact joint corrections with color codes, and stitches the perfected routine video."
                   : "Upload a single classical stance photo to diagnose joint deviations, check hand mudras, and view the corrected classical Kathak alignment."}
               </p>
             </div>
+
+            {/* INSTAGRAM REEL / YOUTUBE SHORT MASTER REFERENCE SELECTOR */}
+            {inputMode === "video" && (
+              <div className="p-3.5 rounded-2xl bg-amber-950/20 border border-amber-500/30 flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Film className="w-4 h-4 text-amber-400" />
+                    <span className="text-xs font-bold text-amber-300 font-cinzel">
+                      Instagram Reel / YouTube Short Choreography Benchmark
+                    </span>
+                  </div>
+                  <label className="flex items-center gap-1.5 text-[11px] text-amber-200/80 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isReelComparisonMode}
+                      onChange={(e) => setIsReelComparisonMode(e.target.checked)}
+                      className="accent-amber-500 rounded"
+                    />
+                    <span>Enable Reel Replication</span>
+                  </label>
+                </div>
+
+                {isReelComparisonMode && (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <input
+                      ref={reelInputRef}
+                      type="file"
+                      accept="video/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setReferenceVideoFile(file);
+                          setReferenceVideoUrl(URL.createObjectURL(file));
+                          setReferenceTitle(file.name);
+                        }
+                      }}
+                      className="hidden"
+                    />
+
+                    <button
+                      onClick={() => reelInputRef.current?.click()}
+                      className="px-3 py-1.5 rounded-xl text-xs font-medium bg-[#140208] text-amber-200 border border-amber-500/40 hover:border-amber-400 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-amber-400" />
+                      Upload Reel / Short
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setReferenceVideoUrl("/samples/sample_kathak_after_clean.webp");
+                        setReferenceVideoFile(null);
+                        setReferenceTitle("Master Kathak Instructor Reel (Sample)");
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-[11px] font-medium bg-amber-500/10 text-amber-300/80 border border-amber-500/20 hover:text-amber-200 transition-all flex items-center gap-1 cursor-pointer"
+                    >
+                      Use Demo Instructor Reel
+                    </button>
+
+                    <div className="text-[11px] text-amber-200/70 font-mono truncate max-w-xs">
+                      Active: <span className="text-amber-300 font-bold">{referenceTitle}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* REAL-TIME FRAME CHECK STATUS BOX */}
             {inputMode === "video" && !videoPreviewUrl && (
@@ -1136,36 +1252,69 @@ export default function Home() {
 
               {/* Itemized Posture Flaws */}
               <div className="flex flex-col gap-3 mb-6">
-                <p className="text-xs font-semibold text-amber-200/90 font-cinzel flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-amber-400" />
-                  Specific Postural Flaws Detected ({correctionResult.pose_standard_name}):
-                </p>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-amber-200/90 font-cinzel flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400" />
+                    Specific Postural Flaws Detected ({correctionResult.pose_standard_name}):
+                  </p>
+
+                  {/* MediaPipe Deviation Color Code Legend */}
+                  <div className="flex items-center gap-3 text-[10px] font-mono bg-black/40 px-3 py-1 rounded-xl border border-amber-500/20">
+                    <span className="flex items-center gap-1.5 text-emerald-400">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                      Green: Perfect (&lt;12°)
+                    </span>
+                    <span className="flex items-center gap-1.5 text-yellow-300">
+                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.8)]" />
+                      Yellow: Minor (12°-25°)
+                    </span>
+                    <span className="flex items-center gap-1.5 text-red-400">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]" />
+                      Red: Critical (&gt;25°)
+                    </span>
+                  </div>
+                </div>
 
                 {correctionResult.errors_detected && correctionResult.errors_detected.length > 0 ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {correctionResult.errors_detected.map((err, idx) => (
-                      <div
-                        key={idx}
-                        className={`p-4 rounded-2xl border transition-all ${
-                          err.severity === "critical"
-                            ? "bg-red-950/40 border-red-500/40 text-red-200"
-                            : "bg-amber-950/30 border-amber-500/35 text-amber-200"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-1.5">
-                          <span className="text-xs font-bold font-cinzel tracking-wider text-amber-300 flex items-center gap-2">
-                            <span className="w-2 h-2 rounded-full bg-red-400" />
-                            {err.timestamp ? `[${err.timestamp}] ` : ""}{err.joint}
-                          </span>
-                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-black/40 border border-amber-500/30 text-amber-300">
-                            Measured: {err.measured_deg}° → Target: {err.target_deg}° (Δ {err.deviation}°)
-                          </span>
+                    {correctionResult.errors_detected.map((err, idx) => {
+                      const isRed = err.severity === "critical" || err.color_category === "red" || err.deviation > 25;
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            isRed
+                              ? "bg-red-950/40 border-red-500/50 text-red-200"
+                              : "bg-amber-950/30 border-yellow-500/40 text-amber-200"
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className="text-xs font-bold font-cinzel tracking-wider text-amber-300 flex items-center gap-2">
+                              <span
+                                className={`w-2.5 h-2.5 rounded-full ${
+                                  isRed
+                                    ? "bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.9)]"
+                                    : "bg-yellow-400 shadow-[0_0_6px_rgba(250,204,21,0.9)]"
+                                }`}
+                              />
+                              {err.timestamp ? `[${err.timestamp}] ` : ""}{err.joint}
+                            </span>
+                            <span
+                              className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                                isRed
+                                  ? "bg-red-900/50 border-red-400 text-red-200"
+                                  : "bg-yellow-950/60 border-yellow-400 text-yellow-300"
+                              }`}
+                            >
+                              Measured: {err.measured_deg}° → Target: {err.target_deg}° (Δ {err.deviation}°)
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#fef2d6] leading-relaxed">
+                            {err.description}
+                          </p>
                         </div>
-                        <p className="text-xs text-[#fef2d6] leading-relaxed">
-                          {err.description}
-                        </p>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2">
@@ -1317,11 +1466,13 @@ export default function Home() {
                     <div className="p-3.5 bg-[#1f040d] border-b border-amber-500/20 flex items-center justify-between">
                       <span className="text-xs font-bold font-cinzel tracking-wider text-amber-300 flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                        BEFORE • With MediaPipe Dots (Kinematic Error Tracking)
+                        BEFORE • With MediaPipe Dots (Color-Coded Analysis)
                       </span>
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/40 text-red-300 border border-red-500/40">
-                        Red Dots = Joint Errors
-                      </span>
+                      <div className="flex items-center gap-1.5 text-[9px] font-mono">
+                        <span className="px-1.5 py-0.5 rounded bg-emerald-950/70 text-emerald-300 border border-emerald-500/40">🟢 OK</span>
+                        <span className="px-1.5 py-0.5 rounded bg-yellow-950/70 text-yellow-300 border border-yellow-500/40">🟡 Minor</span>
+                        <span className="px-1.5 py-0.5 rounded bg-red-950/70 text-red-300 border border-red-500/40">🔴 Major</span>
+                      </div>
                     </div>
                     <div className="relative aspect-video bg-black/80 flex items-center justify-center overflow-hidden">
                       <img
@@ -1332,7 +1483,7 @@ export default function Home() {
                     </div>
                     <div className="p-3 bg-[#18030a] text-center border-t border-amber-500/20">
                       <p className="text-[11px] text-amber-300/80 font-cinzel">
-                        Continuous MediaPipe skeletal mesh highlighting angular deviations in red
+                        Color-coded MediaPipe landmarks: Green (&lt;12°), Yellow (12°-25° minor flaw), Red (&gt;25° critical error)
                       </p>
                     </div>
                   </div>

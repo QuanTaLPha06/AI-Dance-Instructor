@@ -417,7 +417,7 @@ async def generate_visual_pose_correction(
         if bgr_frame is None:
             raise HTTPException(status_code=400, detail="Invalid image file uploaded.")
 
-        # 2. Decode Optional Reference Instructor Frame
+        # 2. Decode Optional Reference Instructor Frame (Reel / Short / Instructor)
         target_ref_bgr = None
         if reference_image is not None:
             ref_bytes = await reference_image.read()
@@ -479,17 +479,20 @@ async def generate_visual_pose_correction(
 @app.post("/api/v1/pose/video-correction")
 async def generate_video_pose_correction(
     video_file: UploadFile = File(...),
+    reference_video: Optional[UploadFile] = File(None),
     pose_preset: str = Form("kathak_hastak"),
     max_frames: int = Form(40),
     fps_sample: int = Form(14)
 ):
     """
-    Video-level Multimodal AI Pose Corrector:
-    1. Splits input video into frames.
+    Video-level Multimodal AI Pose Corrector with Reel / Shorts Comparison Mode:
+    1. Splits input dancer video (and optional reference Instagram Reel / YouTube Short) into frames.
     2. Runs MediaPipe + YOLO pose analytics on each frame.
-    3. Corrects each frame into the perfect Kathak posture.
-    4. Re-encodes frames into before and after synchronized videos (both with and without MediaPipe dots).
-    5. Returns timestamped diagnostics of what is wrong in the dancer's posture across the video.
+    3. If reference video is provided, benchmarks attempt directly against instructor/reel keypoints.
+    4. Computes joint deviations and assigns intuitive color codes (Green = Perfect, Yellow = Minor, Red = Critical).
+    5. Corrects each frame into the ideal posture, rendering visual indicators of what changed.
+    6. Stitches frames into synchronized before/after and side-by-side comparison output videos.
+    7. Cleans up all temporary frame files after operation.
     """
     if not HAS_QWEN_ENGINE or QwenPoseCorrectorEngine is None:
         raise HTTPException(status_code=503, detail="Pose Corrector Engine unavailable.")
@@ -501,8 +504,22 @@ async def generate_video_pose_correction(
         with open(input_vid_path, "wb") as f_out:
             shutil.copyfileobj(video_file.file, f_out)
 
+        # Handle optional reference video (e.g. Instagram Reel / YouTube Short)
+        ref_cap = None
+        has_ref_video = False
+        if reference_video is not None and reference_video.filename:
+            ref_suffix = os.path.splitext(reference_video.filename)[1] or ".mp4"
+            ref_vid_path = os.path.join(tmpdir, f"ref_upload{ref_suffix}")
+            with open(ref_vid_path, "wb") as f_ref:
+                shutil.copyfileobj(reference_video.file, f_ref)
+            ref_cap = cv2.VideoCapture(ref_vid_path)
+            if ref_cap.isOpened():
+                has_ref_video = True
+
         cap = cv2.VideoCapture(input_vid_path)
         if not cap.isOpened():
+            if ref_cap:
+                ref_cap.release()
             raise HTTPException(status_code=400, detail="Could not decode video file.")
 
         total_vid_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -522,86 +539,107 @@ async def generate_video_pose_correction(
         frame_idx = 0
         processed_count = 0
 
-        while cap.isOpened() and processed_count < max_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        try:
+            while cap.isOpened() and processed_count < max_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-            if frame_idx % step == 0:
-                h, w = frame.shape[:2]
-                target_w = 480
-                target_h = int(h * (target_w / w))
-                frame_resized = cv2.resize(frame, (target_w, target_h))
+                ref_frame = None
+                if has_ref_video and ref_cap and ref_cap.isOpened():
+                    r_ret, r_frame = ref_cap.read()
+                    if r_ret:
+                        ref_frame = r_frame
 
-                pose_data = corrector.tracker.process_image(frame_resized)
-                analysis = KinematicDeviationAnalyzer.analyze_pose(
-                    current_lms_3d=pose_data['mp_landmarks_3d'],
-                    target_pose_name=pose_preset
-                )
-                scores.append(analysis.get("accuracy_score", 75.0))
+                if frame_idx % step == 0:
+                    h, w = frame.shape[:2]
+                    target_w = 480
+                    target_h = int(h * (target_w / w))
+                    frame_resized = cv2.resize(frame, (target_w, target_h))
 
-                timestamp_sec = round(frame_idx / orig_fps, 2)
-                for joint, diff in analysis.get("deviations", {}).items():
-                    if abs(diff) > 12.0:
-                        all_errors.append({
-                            "timestamp": f"{int(timestamp_sec//60):02d}:{timestamp_sec%60:04.1f}",
-                            "joint": joint.replace("_", " ").upper(),
-                            "measured_deg": round(analysis["current_angles"].get(joint, 0)),
-                            "target_deg": round(analysis["target_angles"].get(joint, 0)),
-                            "deviation": round(abs(diff)),
-                            "severity": "critical" if abs(diff) > 25 else "warning",
-                            "description": f"At {timestamp_sec:.1f}s: {joint.replace('_', ' ').capitalize()} deviated by {round(abs(diff))}° from {pose_preset} standard."
-                        })
+                    # Process dancer frame
+                    pose_data = corrector.tracker.process_image(frame_resized)
 
-                if analysis.get("coaching_cues"):
-                    all_cues.extend(analysis["coaching_cues"])
+                    # Extract reference frame 3D landmarks if reference reel was provided
+                    ref_3d_lms = None
+                    if ref_frame is not None:
+                        ref_resized = cv2.resize(ref_frame, (target_w, target_h))
+                        ref_pose_data = corrector.tracker.process_image(ref_resized)
+                        if ref_pose_data.get("landmarks_detected", False):
+                            ref_3d_lms = ref_pose_data["mp_landmarks_3d"]
 
-                # Before Clean
-                rgb_orig = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-                pil_before_clean = Image.fromarray(rgb_orig)
+                    analysis = KinematicDeviationAnalyzer.analyze_pose(
+                        current_lms_3d=pose_data['mp_landmarks_3d'],
+                        target_pose_name=pose_preset,
+                        target_lms_3d=ref_3d_lms
+                    )
+                    scores.append(analysis.get("accuracy_score", 75.0))
 
-                # Before Dots
-                pil_before_dots = corrector.create_annotated_overlay(
-                    frame_resized, pose_data, analysis, title_prefix="BEFORE"
-                )
+                    timestamp_sec = round(frame_idx / orig_fps, 2)
+                    for joint, diff in analysis.get("deviations", {}).items():
+                        if abs(diff) > 12.0:
+                            all_errors.append({
+                                "timestamp": f"{int(timestamp_sec//60):02d}:{timestamp_sec%60:04.1f}",
+                                "joint": joint.replace("_", " ").upper(),
+                                "measured_deg": round(analysis["current_angles"].get(joint, 0)),
+                                "target_deg": round(analysis["target_angles"].get(joint, 0)),
+                                "deviation": round(abs(diff)),
+                                "severity": "critical" if abs(diff) > 25 else "warning",
+                                "color_category": "red" if abs(diff) > 25 else "yellow",
+                                "description": f"At {timestamp_sec:.1f}s: {joint.replace('_', ' ').capitalize()} deviated by {round(abs(diff))}° from {'Instructor Reel' if has_ref_video else pose_preset} target."
+                            })
 
-                # After Clean
-                pil_after_clean, _ = corrector.qwen_engine.generate_corrected_image(
-                    input_image=pil_before_clean,
-                    prompt=analysis["qwen_prompt"],
-                    analysis_data=analysis
-                )
-                pil_after_clean = pil_after_clean.resize((target_w, target_h))
+                    if analysis.get("coaching_cues"):
+                        all_cues.extend(analysis["coaching_cues"])
 
-                # After Dots
-                after_bgr = cv2.cvtColor(np.array(pil_after_clean), cv2.COLOR_RGB2BGR)
-                corr_pose_data = corrector.tracker.process_image(after_bgr)
-                if not corr_pose_data.get("landmarks_detected", False) or np.all(corr_pose_data["mp_landmarks_2d"] == 0):
-                    corr_pose_data = pose_data.copy()
-                    corr_pose_data["landmarks_detected"] = True
+                    # Before Clean
+                    rgb_orig = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                    pil_before_clean = Image.fromarray(rgb_orig)
 
-                corr_analysis = {
-                    "deviations": {k: 0.0 for k in analysis.get("deviations", {})},
-                    "current_angles": analysis.get("target_angles", {}),
-                    "target_angles": analysis.get("target_angles", {}),
-                    "accuracy_score": 98.4,
-                    "pose_standard_name": f"{analysis.get('pose_standard_name', 'Kathak')} (Corrected)"
-                }
-                pil_after_dots = corrector.create_annotated_overlay(
-                    after_bgr, corr_pose_data, corr_analysis, title_prefix="AFTER"
-                )
-                pil_after_dots = pil_after_dots.resize((target_w, target_h))
+                    # Before Dots (with color-coded circles)
+                    pil_before_dots = corrector.create_annotated_overlay(
+                        frame_resized, pose_data, analysis, title_prefix="BEFORE (STUDENT)"
+                    )
 
-                frames_before_clean.append(pil_before_clean)
-                frames_before_dots.append(pil_before_dots)
-                frames_after_clean.append(pil_after_clean)
-                frames_after_dots.append(pil_after_dots)
+                    # After Clean (with visual indication of changes)
+                    pil_after_clean, _ = corrector.qwen_engine.generate_corrected_image(
+                        input_image=pil_before_clean,
+                        prompt=analysis["qwen_prompt"],
+                        analysis_data=analysis
+                    )
+                    pil_after_clean = pil_after_clean.resize((target_w, target_h))
 
-                processed_count += 1
+                    # After Dots
+                    after_bgr = cv2.cvtColor(np.array(pil_after_clean), cv2.COLOR_RGB2BGR)
+                    corr_pose_data = corrector.tracker.process_image(after_bgr)
+                    if not corr_pose_data.get("landmarks_detected", False) or np.all(corr_pose_data["mp_landmarks_2d"] == 0):
+                        corr_pose_data = pose_data.copy()
+                        corr_pose_data["landmarks_detected"] = True
 
-            frame_idx += 1
+                    corr_analysis = {
+                        "deviations": {k: 0.0 for k in analysis.get("deviations", {})},
+                        "current_angles": analysis.get("target_angles", {}),
+                        "target_angles": analysis.get("target_angles", {}),
+                        "accuracy_score": 98.4,
+                        "pose_standard_name": f"{analysis.get('pose_standard_name', 'Dance Routine')} (Master Form)"
+                    }
+                    pil_after_dots = corrector.create_annotated_overlay(
+                        after_bgr, corr_pose_data, corr_analysis, title_prefix="PERFECT TARGET"
+                    )
+                    pil_after_dots = pil_after_dots.resize((target_w, target_h))
 
-        cap.release()
+                    frames_before_clean.append(pil_before_clean)
+                    frames_before_dots.append(pil_before_dots)
+                    frames_after_clean.append(pil_after_clean)
+                    frames_after_dots.append(pil_after_dots)
+
+                    processed_count += 1
+
+                frame_idx += 1
+        finally:
+            cap.release()
+            if ref_cap:
+                ref_cap.release()
 
         def frames_to_webp_data_url(pil_frames: List[Image.Image], duration: int = 70) -> str:
             if not pil_frames:
@@ -623,7 +661,8 @@ async def generate_video_pose_correction(
 
         return {
             "status": "success",
-            "pose_standard_name": pose_preset,
+            "pose_standard_name": f"{pose_preset} {'(Reel Comparison)' if has_ref_video else ''}",
+            "comparison_with_reel": has_ref_video,
             "accuracy_score": avg_score,
             "total_frames_processed": len(frames_before_clean),
             "errors_detected": consolidated_errors,
@@ -675,37 +714,54 @@ async def check_dancer_framing(
         x2_norm = max(0.0, min(1.0, float(yolo_bbox[2]) / max(1, w)))
         y2_norm = max(0.0, min(1.0, float(yolo_bbox[3]) / max(1, h)))
 
+        bbox_width = x2_norm - x1_norm
+        bbox_height = y2_norm - y1_norm
+
         warnings = []
         is_flash_warning = False
         framing_status = "READY"
 
         if not landmarks_detected and conf < 0.25:
             framing_status = "NO_PERSON"
-            warnings.append("No dancer detected in camera view.")
+            warnings.append("No dancer detected in camera view. Please step into the frame.")
         else:
-            MARGIN_HORIZ = 0.06
-            MARGIN_TOP = 0.04
-            MARGIN_BOTTOM = 0.06
+            # Tolerant Safety Margins:
+            # Side margins: 4% from outer boundary
+            # Top margin: 3%
+            # Bottom margin: 4%
+            MARGIN_HORIZ = 0.04
+            MARGIN_TOP = 0.03
+            MARGIN_BOTTOM = 0.04
 
+            # Check bounding box size: is person too close or too far?
+            if bbox_height > 0.94:
+                is_flash_warning = True
+                warnings.append("⚠️ STEP BACK: You are too close to the camera, feet or head are clipping!")
+            elif bbox_height < 0.35:
+                warnings.append("COME CLOSER: You are far from the camera. Move a bit closer for clear joint tracking.")
+
+            # Check boundary clipping
             if x1_norm < MARGIN_HORIZ:
                 is_flash_warning = True
-                warnings.append("FLASH WARNING: Dancer breaching LEFT boundary! Move right.")
-            if x2_norm > (1.0 - MARGIN_HORIZ):
+                warnings.append("⚠️ MOVE RIGHT: You are drifting off the left camera edge!")
+            elif x2_norm > (1.0 - MARGIN_HORIZ):
                 is_flash_warning = True
-                warnings.append("FLASH WARNING: Dancer breaching RIGHT boundary! Move left.")
+                warnings.append("⚠️ MOVE LEFT: You are drifting off the right camera edge!")
+
             if y1_norm < MARGIN_TOP:
                 is_flash_warning = True
-                warnings.append("FLASH WARNING: Dancer head/top out of frame! Tilt camera up or step back.")
-            if y2_norm > (1.0 - MARGIN_BOTTOM):
+                warnings.append("⚠️ TILT CAMERA UP: Head or crown is out of frame!")
+            elif y2_norm > (1.0 - MARGIN_BOTTOM):
                 is_flash_warning = True
-                warnings.append("FLASH WARNING: Dancer feet/ankles clipping bottom! Step back.")
+                warnings.append("⚠️ STEP BACK: Feet and ankles clipping bottom edge!")
 
+            # Additional check for ankle visibility if keypoints detected
             if landmarks_detected and len(lms_2d) >= 29:
                 left_ankle_y = float(lms_2d[27][1]) / max(1, h)
                 right_ankle_y = float(lms_2d[28][1]) / max(1, h)
-                if left_ankle_y > 0.95 or right_ankle_y > 0.95:
+                if (left_ankle_y > 0.97 or right_ankle_y > 0.97) and not is_flash_warning:
                     is_flash_warning = True
-                    warnings.append("FLASH WARNING: Feet/Ankles out of frame! Step back.")
+                    warnings.append("⚠️ STEP BACK: Feet/Ghungroos clipping frame bottom!")
 
             if is_flash_warning:
                 framing_status = "OUT_OF_FRAME"
@@ -723,7 +779,7 @@ async def check_dancer_framing(
             "confidence": round(conf, 3),
             "frame_width": w,
             "frame_height": h,
-            "message": warnings[0] if warnings else "Dancer in frame and centered."
+            "message": warnings[0] if warnings else "PERFECT: Dancer is centered and fully in frame."
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

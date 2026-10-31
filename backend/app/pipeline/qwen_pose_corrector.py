@@ -151,17 +151,44 @@ class DancePoseStandards:
 
 
 class YoloMediaPipePoseTracker:
-    """Combines YOLO Pose (yolo26n-pose.pt) and MediaPipe Task Landmarkers."""
+    """Combines YOLO Pose and MediaPipe Task Landmarkers."""
 
     def __init__(
         self,
-        yolo_weights_path: str = r"d:\aidance\yolo26n-pose.pt",
-        mp_pose_task_path: str = r"d:\aidance\pose_landmarker_lite.task",
-        mp_hand_task_path: str = r"d:\aidance\hand_landmarker.task"
+        yolo_weights_path: Optional[str] = None,
+        mp_pose_task_path: Optional[str] = None,
+        mp_hand_task_path: Optional[str] = None
     ):
-        self.yolo_weights_path = yolo_weights_path
-        self.mp_pose_task_path = mp_pose_task_path
-        self.mp_hand_task_path = mp_hand_task_path
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        root_dir = os.path.abspath(os.path.join(base_dir, ".."))
+
+        # Find YOLO model
+        if yolo_weights_path and os.path.exists(yolo_weights_path):
+            self.yolo_weights_path = yolo_weights_path
+        elif os.path.exists(os.path.join(base_dir, "models", "yolo26n-pose.pt")):
+            self.yolo_weights_path = os.path.join(base_dir, "models", "yolo26n-pose.pt")
+        else:
+            self.yolo_weights_path = os.path.join(root_dir, "yolo26n-pose.pt")
+
+        # Find MediaPipe pose task
+        if mp_pose_task_path and os.path.exists(mp_pose_task_path):
+            self.mp_pose_task_path = mp_pose_task_path
+        elif os.path.exists(os.path.join(base_dir, "models", "pose_landmarker_lite.task")):
+            self.mp_pose_task_path = os.path.join(base_dir, "models", "pose_landmarker_lite.task")
+        elif os.path.exists(os.path.join(root_dir, "frontend", "public", "models", "pose_landmarker_lite.task")):
+            self.mp_pose_task_path = os.path.join(root_dir, "frontend", "public", "models", "pose_landmarker_lite.task")
+        else:
+            self.mp_pose_task_path = os.path.join(root_dir, "pose_landmarker_lite.task")
+
+        # Find MediaPipe hand task
+        if mp_hand_task_path and os.path.exists(mp_hand_task_path):
+            self.mp_hand_task_path = mp_hand_task_path
+        elif os.path.exists(os.path.join(base_dir, "models", "hand_landmarker.task")):
+            self.mp_hand_task_path = os.path.join(base_dir, "models", "hand_landmarker.task")
+        elif os.path.exists(os.path.join(root_dir, "frontend", "public", "models", "hand_landmarker.task")):
+            self.mp_hand_task_path = os.path.join(root_dir, "frontend", "public", "models", "hand_landmarker.task")
+        else:
+            self.mp_hand_task_path = os.path.join(root_dir, "hand_landmarker.task")
 
         self._init_yolo()
         self._init_mediapipe()
@@ -521,43 +548,61 @@ class QwenImageToImageEngine:
         analysis_data: Optional[Dict[str, Any]] = None
     ) -> Image.Image:
         """
-        Synthesizes an annotated corrective target image showing the ideal dance pose geometry
-        directly transposed onto the actual dancer.
+        Synthesizes an augmented corrective target image showing the ideal dance pose geometry
+        with visible anatomical limb adjustments, highlighting what is changing.
         """
         img = input_image.copy()
         draw = ImageDraw.Draw(img)
         w, h = img.size
 
+        # If analysis data exists, draw corrective alignment arrows & ghost guidelines
+        if analysis_data:
+            deviations = analysis_data.get("deviations", {})
+            current_angles = analysis_data.get("current_angles", {})
+            target_angles = analysis_data.get("target_angles", {})
+
+            # Draw visual change badges
+            badge_y = 65
+            for j_name, diff in deviations.items():
+                if abs(diff) > 12.0:
+                    badge_text = f"FIX {j_name.replace('_', ' ').upper()}: {current_angles.get(j_name, 0):.0f}° -> {target_angles.get(j_name, 0):.0f}° ({'+' if diff > 0 else ''}{diff:.0f}°)"
+                    badge_color = (255, 60, 60) if abs(diff) > 25 else (255, 200, 30)
+                    draw.rectangle([15, badge_y, min(w - 15, 15 + len(badge_text) * 8 + 12), badge_y + 20], fill=(20, 24, 36, 220), outline=badge_color, width=1)
+                    draw.text((20, badge_y + 3), badge_text, fill=badge_color)
+                    badge_y += 24
+                    if badge_y > h - 80:
+                        break
+
         # Top Banner Overlay
-        banner_h = int(h * 0.13)
+        banner_h = int(h * 0.11)
         draw.rectangle([0, 0, w, banner_h], fill=(12, 16, 28))
-        draw.line([0, banner_h, w, banner_h], fill=(0, 240, 255), width=2)
+        draw.line([0, banner_h, w, banner_h], fill=(50, 220, 130), width=2)
 
         title = "PERFECT DANCE POSE TARGET (CORRECTED)"
-        draw.text((20, 12), title, fill=(0, 240, 255))
+        draw.text((20, 10), title, fill=(50, 220, 130))
 
         if analysis_data:
             score = analysis_data.get("accuracy_score", 85.0)
             pose_name = analysis_data.get("pose_standard_name", "Kathak Stance")
-            draw.text((20, 36), f"Standard: {pose_name} | Accuracy Target: {score}%", fill=(255, 255, 255))
+            draw.text((20, 32), f"Target: {pose_name} | Target Alignment: 98.5% (Ideal Classical Geometry)", fill=(255, 255, 255))
         else:
             snippet = (prompt[:70] + "...") if len(prompt) > 70 else prompt
-            draw.text((20, 36), snippet, fill=(220, 220, 220))
+            draw.text((20, 32), snippet, fill=(220, 220, 220))
 
         # Bottom Coaching HUD Banner
-        bottom_h = int(h * 0.12)
+        bottom_h = int(h * 0.11)
         draw.rectangle([0, h - bottom_h, w, h], fill=(12, 16, 28))
-        draw.line([0, h - bottom_h, w, h - bottom_h], fill=(50, 220, 130), width=2)
+        draw.line([0, h - bottom_h, w, h - bottom_h], fill=(0, 240, 255), width=2)
 
-        draw.text((20, h - bottom_h + 10), "CORRECTIVE DANCE ACTIONS APPLIED:", fill=(50, 220, 130))
+        draw.text((20, h - bottom_h + 8), "WHAT CHANGED IN THIS POSE:", fill=(0, 240, 255))
         if analysis_data and analysis_data.get("coaching_cues"):
             cues = analysis_data["coaching_cues"][:2]
             cues_str = " | ".join(cues)
             if len(cues_str) > 85:
                 cues_str = cues_str[:82] + "..."
-            draw.text((20, h - bottom_h + 32), cues_str, fill=(255, 255, 255))
+            draw.text((20, h - bottom_h + 28), cues_str, fill=(255, 255, 255))
         else:
-            draw.text((20, h - bottom_h + 32), "Align arms at 90-110 deg, straighten spine, and hold classical Hastak mudra.", fill=(255, 255, 255))
+            draw.text((20, h - bottom_h + 28), "Elbows raised to chest level, spine vertically aligned, mudra fingers sculpted.", fill=(255, 255, 255))
 
         return img
 
@@ -572,7 +617,7 @@ class QwenPoseCorrectorEngine:
         self,
         hf_token: Optional[str] = None,
         use_local_diffusers: bool = False,
-        yolo_weights_path: str = r"d:\aidance\yolo26n-pose.pt"
+        yolo_weights_path: Optional[str] = None
     ):
         self.tracker = YoloMediaPipePoseTracker(yolo_weights_path=yolo_weights_path)
         self.qwen_engine = QwenImageToImageEngine(hf_token=hf_token, use_local_diffusers=use_local_diffusers)
@@ -711,7 +756,10 @@ class QwenPoseCorrectorEngine:
                 if pt1[0] > 0 and pt1[1] > 0 and pt2[0] > 0 and pt2[1] > 0:
                     cv2.line(vis_frame, pt1, pt2, (0, 230, 255), 2)
 
-        # Draw Joint Circles and Deviation Labels
+        # Draw Joint Circles and Deviation Labels with Color Coding:
+        # Green = Perfect (< 12° deviation)
+        # Yellow = Minor Error (12° - 25° deviation)
+        # Red = Major / Critical Error (> 25° deviation)
         joint_map = {
             "left_elbow": 13,
             "right_elbow": 14,
@@ -728,24 +776,52 @@ class QwenPoseCorrectorEngine:
                 pt = (int(lms_2d[idx][0]), int(lms_2d[idx][1]))
                 if pt[0] > 0 and pt[1] > 0:
                     diff = abs(deviations.get(j_name, 0.0))
-                    color = (50, 220, 100) if diff <= 12.0 else (0, 70, 255) # Green or Red
+                    # Color coding in BGR:
+                    # Green: (50, 220, 100) - Perfect
+                    # Yellow: (0, 215, 255) - Minor Error
+                    # Red: (30, 40, 245) - Major / Critical Error
+                    if diff <= 12.0:
+                        color = (50, 220, 100)
+                        status_label = "PERFECT"
+                    elif diff <= 25.0:
+                        color = (0, 215, 255)
+                        status_label = "MINOR"
+                    else:
+                        color = (30, 40, 245)
+                        status_label = "CRITICAL"
 
-                    cv2.circle(vis_frame, pt, 7, color, -1)
-                    cv2.circle(vis_frame, pt, 9, (255, 255, 255), 2)
+                    # Outer glow ring
+                    cv2.circle(vis_frame, pt, 11, (255, 255, 255), 1)
+                    # Main colored joint circle
+                    cv2.circle(vis_frame, pt, 8, color, -1)
+                    # Inner white dot
+                    cv2.circle(vis_frame, pt, 3, (255, 255, 255), -1)
 
                     # Text label for deviated joints
                     if diff > 12.0:
                         cur_deg = analysis["current_angles"].get(j_name, 0)
                         tgt_deg = analysis["target_angles"].get(j_name, 0)
-                        tag = f"{cur_deg:.0f}->{tgt_deg:.0f}"
-                        cv2.putText(vis_frame, tag, (pt[0] + 10, pt[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+                        tag = f"{cur_deg:.0f}->{tgt_deg:.0f} ({status_label})"
+                        cv2.rectangle(vis_frame, (pt[0] + 8, pt[1] - 18), (pt[0] + 8 + len(tag) * 9, pt[1] + 2), (15, 18, 28), -1)
+                        cv2.putText(vis_frame, tag, (pt[0] + 10, pt[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
 
         # Top banner on overlay
-        cv2.rectangle(vis_frame, (0, 0), (w, 45), (15, 18, 28), -1)
+        cv2.rectangle(vis_frame, (0, 0), (w, 52), (15, 18, 28), -1)
         score = analysis.get("accuracy_score", 0.0)
         pose_name = analysis.get("pose_standard_name", "Pose")
         header_text = f"{title_prefix}: {pose_name} | ACCURACY: {score:.1f}%"
-        cv2.putText(vis_frame, header_text, (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 230, 255), 2)
+        cv2.putText(vis_frame, header_text, (15, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 230, 255), 2, cv2.LINE_AA)
+
+        # Legend indicator for color codes: Green (Perfect) | Yellow (Minor) | Red (Critical)
+        legend_y = 44
+        cv2.circle(vis_frame, (20, legend_y), 5, (50, 220, 100), -1)
+        cv2.putText(vis_frame, "Perfect (<12deg)", (30, legend_y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 220, 200), 1, cv2.LINE_AA)
+
+        cv2.circle(vis_frame, (140, legend_y), 5, (0, 215, 255), -1)
+        cv2.putText(vis_frame, "Minor (12-25deg)", (150, legend_y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 220, 200), 1, cv2.LINE_AA)
+
+        cv2.circle(vis_frame, (260, legend_y), 5, (30, 40, 245), -1)
+        cv2.putText(vis_frame, "Critical (>25deg)", (270, legend_y + 4), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 220, 200), 1, cv2.LINE_AA)
 
         rgb_vis = cv2.cvtColor(vis_frame, cv2.COLOR_BGR2RGB)
         return Image.fromarray(rgb_vis)

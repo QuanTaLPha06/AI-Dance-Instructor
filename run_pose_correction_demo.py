@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 # Add backend directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "backend")))
 
+# pyrefly: ignore[missing-import]
 from app.pipeline.qwen_pose_corrector import QwenPoseCorrectorEngine
 
 def create_sample_dancer_image(width=640, height=640) -> np.ndarray:
